@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 const ALLOWED_EVENTS = new Set([
@@ -37,18 +37,12 @@ function debugDump(payload) {
 function forwardToHook(payload) {
   try {
     debugDump(payload);
-    const proc = spawn('python3', [resolveHookPath()], {
+    spawnSync('python3', [resolveHookPath()], {
+      input: JSON.stringify(payload || {}),
       stdio: ['pipe', 'ignore', 'ignore'],
       env: process.env,
-      detached: true,
+      timeout: 5000,
     });
-
-    proc.on('error', () => {
-      // fail-open: never block OpenCode
-    });
-
-    proc.stdin.end(JSON.stringify(payload || {}));
-    proc.unref();
   } catch {
     // fail-open: never block OpenCode
   }

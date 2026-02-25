@@ -16,6 +16,7 @@ OpenCode 로컬 플러그인 훅을 사용해 OpenCode 이벤트를 [Langfuse](h
 
 - `langfuse_plugin.js` -> `langfuse_hook.py` 이벤트 전달
 - Fail-open (오류가 나도 OpenCode 실행 차단 없음)
+- 이벤트 전달 안정화(세션 종료 시점 이벤트 누락 감소를 위한 동기식 hook 호출)
 - `TRACE_TO_LANGFUSE=true` 일 때만 동작
 - 지원 환경변수:
   - `LANGFUSE_PUBLIC_KEY`

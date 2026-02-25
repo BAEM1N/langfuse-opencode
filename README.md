@@ -16,6 +16,7 @@ This project forwards OpenCode `event` stream payloads to a Python hook and reco
 
 - Event-hook based integration (`langfuse_plugin.js` -> `langfuse_hook.py`)
 - Fail-open design (never blocks OpenCode)
+- Reliable event forwarding (sync hook invocation to reduce end-of-session event loss)
 - Runtime gate: `TRACE_TO_LANGFUSE=true`
 - Supports:
   - `LANGFUSE_PUBLIC_KEY`

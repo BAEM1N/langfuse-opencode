@@ -176,8 +176,12 @@ def _load_state() -> Dict[str, Any]:
                 "message_events": {},
                 "user_parts": {},
                 "assistant_parts": {},
+                "assistant_finish_seen": {},
                 "pending_parts": {},
+                "message_last_seen": {},
+                "part_last_seen": {},
                 "emitted": {},
+                "session_lifecycle": {},
             }
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         if isinstance(data, dict):
@@ -185,8 +189,12 @@ def _load_state() -> Dict[str, Any]:
             data.setdefault("message_events", {})
             data.setdefault("user_parts", {})
             data.setdefault("assistant_parts", {})
+            data.setdefault("assistant_finish_seen", {})
             data.setdefault("pending_parts", {})
+            data.setdefault("message_last_seen", {})
+            data.setdefault("part_last_seen", {})
             data.setdefault("emitted", {})
+            data.setdefault("session_lifecycle", {})
             return data
     except Exception:
         pass
@@ -195,8 +203,12 @@ def _load_state() -> Dict[str, Any]:
         "message_events": {},
         "user_parts": {},
         "assistant_parts": {},
+        "assistant_finish_seen": {},
         "pending_parts": {},
+        "message_last_seen": {},
+        "part_last_seen": {},
         "emitted": {},
+        "session_lifecycle": {},
     }
 
 
@@ -259,6 +271,24 @@ def _session_id(payload: Dict[str, Any]) -> str:
         if candidate:
             return str(candidate)
     return "unknown-session"
+
+
+def _event_captured_at(payload: Dict[str, Any]) -> datetime:
+    dt = _parse_dt(payload.get("captured_at"))
+    if dt:
+        return dt
+    ev = _event_obj(payload)
+    dt = _parse_dt(ev.get("timestamp"))
+    if dt:
+        return dt
+    return datetime.now(timezone.utc)
+
+
+def _is_older_event(last_seen: Dict[str, Any], key: str, event_dt: datetime) -> bool:
+    prev = _parse_dt(last_seen.get(key))
+    if prev is None:
+        return False
+    return event_dt < prev
 
 
 def _build_client():
@@ -622,9 +652,57 @@ def _maybe_emit_assistant_turn(client: Any, state: Dict[str, Any], session_id: s
     # Keep memory bounded.
     state["assistant_parts"].pop(assistant_key, None)
     state["message_events"].pop(assistant_key, None)
+    state["assistant_finish_seen"].pop(assistant_key, None)
     if user_key:
         state["user_parts"].pop(user_key, None)
         state["message_events"].pop(user_key, None)
+
+
+def _cleanup_emitted_message_buffers(state: Dict[str, Any], session_id: str, message_id: str) -> None:
+    key = _msg_key(session_id, message_id)
+    state["assistant_parts"].pop(key, None)
+    state["message_events"].pop(key, None)
+    state["assistant_finish_seen"].pop(key, None)
+
+
+def _flush_pending_assistant_turns(client: Any, state: Dict[str, Any], session_id: str, reason: str) -> None:
+    if not session_id or session_id == "unknown-session":
+        return
+
+    prefix = f"{session_id}:"
+    emitted_now = 0
+    scanned = 0
+    assistant_parts_map = _as_dict(state.get("assistant_parts"))
+
+    for key in list(assistant_parts_map.keys()):
+        if not isinstance(key, str) or not key.startswith(prefix):
+            continue
+        scanned += 1
+        message_id = key[len(prefix):]
+        if not message_id:
+            continue
+
+        turn_id = _turn_key(session_id, message_id)
+        if state["emitted"].get(turn_id):
+            _cleanup_emitted_message_buffers(state, session_id, message_id)
+            continue
+
+        parts_map = _as_dict(assistant_parts_map.get(key))
+        if not parts_map:
+            continue
+
+        info = _as_dict(_as_dict(state.get("messages")).get(key))
+        if not info:
+            info = {"id": message_id, "role": "assistant", "time": {}, "parentID": ""}
+
+        before = bool(state["emitted"].get(turn_id))
+        _maybe_emit_assistant_turn(client, state, session_id, message_id, info)
+        after = bool(state["emitted"].get(turn_id))
+        if after and not before:
+            emitted_now += 1
+
+    if emitted_now > 0:
+        _log("INFO", f"flush emitted pending turns session={session_id} reason={reason} scanned={scanned} emitted={emitted_now}")
 
 
 def _handle_message_updated(client: Any, state: Dict[str, Any], payload: Dict[str, Any], session_id: str) -> None:
@@ -634,10 +712,23 @@ def _handle_message_updated(client: Any, state: Dict[str, Any], payload: Dict[st
         return
 
     key = _msg_key(session_id, message_id)
+    event_dt = _event_captured_at(payload)
+    message_last_seen = _as_dict(state.get("message_last_seen"))
+    state["message_last_seen"] = message_last_seen
+    if _is_older_event(message_last_seen, key, event_dt):
+        return
+    message_last_seen[key] = event_dt.isoformat()
+
     state["messages"][key] = info
-    _append_message_event(state, key, info)
 
     role = str(info.get("role") or "").lower()
+    if role == "assistant":
+        turn_id = _turn_key(session_id, message_id)
+        if state["emitted"].get(turn_id):
+            _cleanup_emitted_message_buffers(state, session_id, message_id)
+            return
+
+    _append_message_event(state, key, info)
 
     # Reconcile out-of-order message.part.updated events.
     pending = _as_dict(state["pending_parts"].pop(key, {}))
@@ -653,6 +744,8 @@ def _handle_message_updated(client: Any, state: Dict[str, Any], payload: Dict[st
 
     completed = bool(_as_dict(info.get("time")).get("completed"))
     if completed:
+        state["assistant_finish_seen"][key] = _iso_now()
+    if completed:
         _maybe_emit_assistant_turn(client, state, session_id, message_id, info)
 
 
@@ -664,6 +757,19 @@ def _handle_message_part_updated(client: Any, state: Dict[str, Any], payload: Di
         return
 
     key = _msg_key(session_id, message_id)
+    event_dt = _event_captured_at(payload)
+    part_key = f"{key}:{part_id}"
+    part_last_seen = _as_dict(state.get("part_last_seen"))
+    state["part_last_seen"] = part_last_seen
+    if _is_older_event(part_last_seen, part_key, event_dt):
+        return
+    part_last_seen[part_key] = event_dt.isoformat()
+
+    turn_id = _turn_key(session_id, message_id)
+    if state["emitted"].get(turn_id):
+        _cleanup_emitted_message_buffers(state, session_id, message_id)
+        return
+
     msg = _as_dict(state["messages"].get(key))
     role = str(msg.get("role") or "").lower()
     part_type = str(part.get("type") or "")
@@ -682,10 +788,13 @@ def _handle_message_part_updated(client: Any, state: Dict[str, Any], payload: Di
     state[bucket].setdefault(key, {})
     state[bucket][key][part_id] = part
 
-    if role == "assistant" and msg:
-        completed = bool(_as_dict(msg.get("time")).get("completed"))
-        if completed:
-            _maybe_emit_assistant_turn(client, state, session_id, message_id, msg)
+    if role == "assistant":
+        if part_type == "step-finish":
+            state["assistant_finish_seen"][key] = _iso_now()
+        completed = bool(_as_dict(msg.get("time")).get("completed")) if msg else False
+        finish_seen = bool(_as_dict(state.get("assistant_finish_seen")).get(key))
+        if completed or finish_seen:
+            _maybe_emit_assistant_turn(client, state, session_id, message_id, msg or {"id": message_id, "role": "assistant"})
 
 
 def main() -> None:
@@ -707,14 +816,30 @@ def main() -> None:
     _log("DEBUG", f"event={event_name} session={session_id}")
     with _state_lock():
         state = _load_state()
+        lifecycle_map = _as_dict(state.get("session_lifecycle"))
+        state["session_lifecycle"] = lifecycle_map
 
         if event_name == "message.updated":
             _handle_message_updated(client, state, payload, session_id)
         elif event_name == "message.part.updated":
             _handle_message_part_updated(client, state, payload, session_id)
+            last = _as_dict(lifecycle_map.get(session_id))
+            last_event = str(last.get("event") or "")
+            if last_event in {"session.idle", "session.error", "session.compacted"}:
+                _flush_pending_assistant_turns(client, state, session_id, f"{last_event}:post-part")
         elif event_name in {"message.removed", "message.part.removed"}:
             # Best-effort cleanup events can be handled later if needed.
             pass
+
+        if event_name in {"session.created", "session.idle", "session.error", "session.compacted"}:
+            event_dt = _event_captured_at(payload)
+            prev = _as_dict(lifecycle_map.get(session_id))
+            prev_dt = _parse_dt(prev.get("at"))
+            if prev_dt is None or event_dt >= prev_dt:
+                lifecycle_map[session_id] = {"event": event_name, "at": event_dt.isoformat()}
+
+        if event_name in {"session.idle", "session.error", "session.compacted"}:
+            _flush_pending_assistant_turns(client, state, session_id, event_name)
 
         if event_name in {"session.created", "session.idle", "session.error", "session.compacted"}:
             _emit_lifecycle_trace(client, payload, event_name, session_id)
@@ -728,6 +853,7 @@ def main() -> None:
                 f"message_events={len(_as_dict(state.get('message_events')))} "
                 f"user_parts={len(_as_dict(state.get('user_parts')))} "
                 f"assistant_parts={len(_as_dict(state.get('assistant_parts')))} "
+                f"assistant_finish_seen={len(_as_dict(state.get('assistant_finish_seen')))} "
                 f"pending_parts={len(_as_dict(state.get('pending_parts')))} "
                 f"emitted={len(_as_dict(state.get('emitted')))}"
             ),
