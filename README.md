@@ -5,6 +5,13 @@
 Automatic [Langfuse](https://langfuse.com) tracing for OpenCode using local plugin hooks.
 This project forwards OpenCode `event` stream payloads to a Python hook and reconstructs assistant turns into Langfuse traces.
 
+## Status (February 25, 2026)
+
+- ✅ OpenCode + OpenRouter free-model run verified end-to-end
+- ✅ `session.created` / `turn` / `session.idle` traces confirmed in Langfuse
+- ✅ Turn metadata includes `session_id`, `user_id`, `hostname`, parts, and message-level history
+- Progress docs: [English](./PROGRESS.md) | [한국어](./PROGRESS.ko.md)
+
 ## Features
 
 - Event-hook based integration (`langfuse_plugin.js` -> `langfuse_hook.py`)

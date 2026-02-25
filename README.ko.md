@@ -5,6 +5,13 @@
 OpenCode 로컬 플러그인 훅을 사용해 OpenCode 이벤트를 [Langfuse](https://langfuse.com)로 전송하는 프로젝트입니다.
 `event` 훅에서 Python 스크립트를 호출하고, assistant 메시지를 턴 단위 trace로 재구성합니다.
 
+## 상태 (2026년 2월 25일)
+
+- ✅ OpenCode + OpenRouter 무료 모델 기준 E2E 검증 완료
+- ✅ `session.created` / `turn` / `session.idle` 트레이스가 Langfuse에 정상 생성됨
+- ✅ 턴 메타데이터에 `session_id`, `user_id`, `hostname`, 파트, 메시지 이력 저장 확인
+- 진행 문서: [English](./PROGRESS.md) | [한국어](./PROGRESS.ko.md)
+
 ## 주요 기능
 
 - `langfuse_plugin.js` -> `langfuse_hook.py` 이벤트 전달
