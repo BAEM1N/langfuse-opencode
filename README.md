@@ -26,6 +26,7 @@ This project forwards OpenCode `event` stream payloads to a Python hook and reco
   - `session.compacted`
 - Metadata tags include `opencode` and `product=reconstruction`
 - Turn metadata includes `session_id`, `user_id`, `hostname`, and per-turn user/assistant parts
+- Turn metadata also includes per-message history from `message.updated` events (`message_events.user`, `message_events.assistant`)
 
 ## Quick Start
 
@@ -69,6 +70,7 @@ LANGFUSE_SECRET_KEY=sk-lf-...
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
 LANGFUSE_USER_ID=opencode-user
 OPENCODE_LANGFUSE_LOG_LEVEL=INFO
+OPENCODE_LANGFUSE_MAX_MESSAGE_EVENTS_PER_MESSAGE=30
 ```
 
 4. Merge plugin registration into `~/.config/opencode/opencode.json`:

@@ -26,6 +26,7 @@ OpenCode 로컬 플러그인 훅을 사용해 OpenCode 이벤트를 [Langfuse](h
   - `session.compacted`
 - 메타데이터 태그: `opencode`, `product=reconstruction`
 - 턴 메타데이터: `session_id`, `user_id`, `hostname`, 턴별 user/assistant part 저장
+- 턴 메타데이터에 `message.updated` 이력도 저장 (`message_events.user`, `message_events.assistant`)
 
 ## 빠른 설치
 
@@ -69,6 +70,7 @@ LANGFUSE_SECRET_KEY=sk-lf-...
 LANGFUSE_BASE_URL=https://cloud.langfuse.com
 LANGFUSE_USER_ID=opencode-user
 OPENCODE_LANGFUSE_LOG_LEVEL=INFO
+OPENCODE_LANGFUSE_MAX_MESSAGE_EVENTS_PER_MESSAGE=30
 ```
 
 4) `~/.config/opencode/opencode.json` 에 plugin 배열 병합

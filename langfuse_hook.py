@@ -34,6 +34,7 @@ STATE_FILE = STATE_DIR / "state.json"
 STATE_LOCK_FILE = STATE_DIR / "state.lock"
 LOG_FILE = STATE_DIR / "langfuse_hook.log"
 MAX_CHARS = int(os.environ.get("OPENCODE_LANGFUSE_MAX_CHARS", "20000"))
+MAX_MESSAGE_EVENTS_PER_MESSAGE = int(os.environ.get("OPENCODE_LANGFUSE_MAX_MESSAGE_EVENTS_PER_MESSAGE", "30"))
 
 _LOG_LEVELS = {"DEBUG": 10, "INFO": 20, "WARN": 30, "WARNING": 30, "ERROR": 40}
 
@@ -170,10 +171,18 @@ def _state_lock():
 def _load_state() -> Dict[str, Any]:
     try:
         if not STATE_FILE.exists():
-            return {"messages": {}, "user_parts": {}, "assistant_parts": {}, "pending_parts": {}, "emitted": {}}
+            return {
+                "messages": {},
+                "message_events": {},
+                "user_parts": {},
+                "assistant_parts": {},
+                "pending_parts": {},
+                "emitted": {},
+            }
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         if isinstance(data, dict):
             data.setdefault("messages", {})
+            data.setdefault("message_events", {})
             data.setdefault("user_parts", {})
             data.setdefault("assistant_parts", {})
             data.setdefault("pending_parts", {})
@@ -181,7 +190,14 @@ def _load_state() -> Dict[str, Any]:
             return data
     except Exception:
         pass
-    return {"messages": {}, "user_parts": {}, "assistant_parts": {}, "pending_parts": {}, "emitted": {}}
+    return {
+        "messages": {},
+        "message_events": {},
+        "user_parts": {},
+        "assistant_parts": {},
+        "pending_parts": {},
+        "emitted": {},
+    }
 
 
 def _save_state(state: Dict[str, Any]) -> None:
@@ -318,6 +334,18 @@ def _serialize_part(part: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _append_message_event(state: Dict[str, Any], key: str, info: Dict[str, Any]) -> None:
+    state["message_events"].setdefault(key, [])
+    state["message_events"][key].append(
+        {
+            "captured_at": _iso_now(),
+            "info": _safe_json(info),
+        }
+    )
+    if len(state["message_events"][key]) > MAX_MESSAGE_EVENTS_PER_MESSAGE:
+        state["message_events"][key] = state["message_events"][key][-MAX_MESSAGE_EVENTS_PER_MESSAGE:]
+
+
 def _parts_type_counts(parts_map: Dict[str, Any]) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for part in parts_map.values():
@@ -410,6 +438,8 @@ def _emit_turn_trace(
     session_id: str,
     user_info: Dict[str, Any],
     assistant_info: Dict[str, Any],
+    user_message_events: List[Dict[str, Any]],
+    assistant_message_events: List[Dict[str, Any]],
     user_parts_map: Dict[str, Any],
     assistant_parts_map: Dict[str, Any],
     input_text: str,
@@ -442,6 +472,14 @@ def _emit_turn_trace(
         "messages": {
             "user_info": _safe_json(user_info),
             "assistant_info": _safe_json(assistant_info),
+        },
+        "message_events": {
+            "user": _safe_json(user_message_events),
+            "assistant": _safe_json(assistant_message_events),
+        },
+        "message_events_count": {
+            "user": len(user_message_events),
+            "assistant": len(assistant_message_events),
         },
         "parts": {
             "user": [_serialize_part(_as_dict(p)) for p in user_parts_map.values()],
@@ -541,9 +579,13 @@ def _maybe_emit_assistant_turn(client: Any, state: Dict[str, Any], session_id: s
         return
 
     parent_id = str(info.get("parentID") or "")
-    user_info = _as_dict(state["messages"].get(_msg_key(session_id, parent_id)))
-    user_parts = _as_dict(state["user_parts"].get(_msg_key(session_id, parent_id)))
-    assistant_parts = _as_dict(state["assistant_parts"].get(_msg_key(session_id, message_id)))
+    user_key = _msg_key(session_id, parent_id) if parent_id else ""
+    assistant_key = _msg_key(session_id, message_id)
+    user_info = _as_dict(state["messages"].get(user_key))
+    user_message_events = state["message_events"].get(user_key, []) if user_key else []
+    assistant_message_events = state["message_events"].get(assistant_key, [])
+    user_parts = _as_dict(state["user_parts"].get(user_key))
+    assistant_parts = _as_dict(state["assistant_parts"].get(assistant_key))
 
     input_text = _extract_text_from_parts(user_parts)
     output_text, reasoning, tools = _build_turn_details(assistant_parts)
@@ -551,20 +593,38 @@ def _maybe_emit_assistant_turn(client: Any, state: Dict[str, Any], session_id: s
         _log("DEBUG", f"turn skip: no output session={session_id} message={message_id}")
         return
 
-    _emit_turn_trace(client, session_id, user_info, info, user_parts, assistant_parts, input_text, output_text, reasoning, tools)
+    _emit_turn_trace(
+        client,
+        session_id,
+        user_info,
+        info,
+        user_message_events,
+        assistant_message_events,
+        user_parts,
+        assistant_parts,
+        input_text,
+        output_text,
+        reasoning,
+        tools,
+    )
     state["emitted"][turn_id] = _iso_now()
     _log(
         "INFO",
         (
             f"turn emitted session={session_id} turn_id={turn_id} "
             f"assistant_message_id={message_id} "
+            f"user_message_events={len(user_message_events)} assistant_message_events={len(assistant_message_events)} "
             f"user_parts={len(user_parts)} assistant_parts={len(assistant_parts)} "
             f"reasoning={len(reasoning)} tools={len(tools)}"
         ),
     )
 
     # Keep memory bounded.
-    state["assistant_parts"].pop(_msg_key(session_id, message_id), None)
+    state["assistant_parts"].pop(assistant_key, None)
+    state["message_events"].pop(assistant_key, None)
+    if user_key:
+        state["user_parts"].pop(user_key, None)
+        state["message_events"].pop(user_key, None)
 
 
 def _handle_message_updated(client: Any, state: Dict[str, Any], payload: Dict[str, Any], session_id: str) -> None:
@@ -575,6 +635,7 @@ def _handle_message_updated(client: Any, state: Dict[str, Any], payload: Dict[st
 
     key = _msg_key(session_id, message_id)
     state["messages"][key] = info
+    _append_message_event(state, key, info)
 
     role = str(info.get("role") or "").lower()
 
@@ -664,6 +725,7 @@ def main() -> None:
             (
                 "state-saved "
                 f"messages={len(_as_dict(state.get('messages')))} "
+                f"message_events={len(_as_dict(state.get('message_events')))} "
                 f"user_parts={len(_as_dict(state.get('user_parts')))} "
                 f"assistant_parts={len(_as_dict(state.get('assistant_parts')))} "
                 f"pending_parts={len(_as_dict(state.get('pending_parts')))} "
