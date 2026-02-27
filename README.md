@@ -57,7 +57,7 @@ cd langfuse-opencode
 1. Install SDK:
 
 ```bash
-python3 -m pip install --upgrade langfuse
+python3 -m pip install --upgrade langfuse   # or `python -m pip install ...` on Windows
 ```
 
 2. Install plugin + hook:
@@ -96,7 +96,7 @@ OPENCODE_LANGFUSE_MAX_MESSAGE_EVENTS_PER_MESSAGE=30
 ## Validation
 
 ```bash
-python3 -m py_compile langfuse_hook.py
+python3 -m py_compile langfuse_hook.py   # or `python -m py_compile ...` on Windows
 node --check langfuse_plugin.js
 ```
 

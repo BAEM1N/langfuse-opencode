@@ -34,10 +34,20 @@ function debugDump(payload) {
   }
 }
 
+function findPython() {
+  for (const cmd of ['python3', 'python']) {
+    try {
+      const result = spawnSync(cmd, ['--version'], { timeout: 5000 });
+      if (result.status === 0) return cmd;
+    } catch {}
+  }
+  return 'python3'; // fallback
+}
+
 function forwardToHook(payload) {
   try {
     debugDump(payload);
-    spawnSync('python3', [resolveHookPath()], {
+    spawnSync(findPython(), [resolveHookPath()], {
       input: JSON.stringify(payload || {}),
       stdio: ['pipe', 'ignore', 'ignore'],
       env: process.env,

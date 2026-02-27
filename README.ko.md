@@ -57,7 +57,7 @@ cd langfuse-opencode
 1) SDK 설치
 
 ```bash
-python3 -m pip install --upgrade langfuse
+python3 -m pip install --upgrade langfuse   # 또는 Windows에서는 `python -m pip install ...`
 ```
 
 2) 플러그인/훅 복사
@@ -96,7 +96,7 @@ OPENCODE_LANGFUSE_MAX_MESSAGE_EVENTS_PER_MESSAGE=30
 ## 검증
 
 ```bash
-python3 -m py_compile langfuse_hook.py
+python3 -m py_compile langfuse_hook.py   # 또는 Windows에서는 `python -m py_compile ...`
 node --check langfuse_plugin.js
 ```
 
